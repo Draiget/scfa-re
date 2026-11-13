@@ -777,6 +777,23 @@ namespace moho
     mEffects.push_back(replacementEffect);
   }
 
+  // Engine addition. It goes through ReloadEffectFile, which keeps retail's Sleep(100): every call stalls the frame by
+  // 100 ms. Fine at a map load; it is not for a per-frame path (a terrain rebuild, a map with water bodies after one
+  // without, or toggling ren_TerrainWaterLevels, pays it once).
+  bool CD3DDeviceResources::ReloadEffectNamed(
+    const char* const effectName
+  )
+  {
+    const CD3DEffect* const before = FindEffect(effectName);
+    if (before == nullptr) {
+      return false;
+    }
+    const fa::string path = before->mFile; // the effect is deleted by the reload: keep its path
+    ReloadEffectFile(path);
+    // the reload puts the new effect last (it is allocated while the old one lives, so never at its address)
+    return !mEffects.empty() && mEffects.back() != before && FindEffect(effectName) == mEffects.back();
+  }
+
   /**
    * Address: 0x004424A0 (FUN_004424A0, Moho::CD3DDeviceResources::DevResInitResources)
    *

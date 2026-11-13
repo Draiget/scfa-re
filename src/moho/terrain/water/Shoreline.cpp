@@ -1,7 +1,6 @@
 #include "moho/terrain/water/Shoreline.h"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstring>
 #include <new>
@@ -35,15 +34,6 @@ namespace
     float z;
   };
 
-  using ShoreCellMaskBuilder = void (*)(
-    moho::ShoreCell& cell,
-    float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  );
-
   constexpr float kPointBias = 0.1f;
   constexpr float kSpatialPadding = 2.0f;
   constexpr float kSpatialWaterPadding = 1.0f;
@@ -51,7 +41,8 @@ namespace
   constexpr float kNoWaterElevation = -10000.0f;
   constexpr float kHeightfieldSampleScale = 0.0078125f;
   constexpr std::uint32_t kShorelineVertexSheetUsageToken = 1U;
-  constexpr std::int32_t kShorelineVertexSheetVertexCount = 0x3000;
+  // Retail 0x3000 (4096 triangles): a long coast overflows that and the cells past the cap are dropped in blocks.
+  constexpr std::int32_t kShorelineVertexSheetVertexCount = 0x30000;
   constexpr std::int32_t kShorelineVertexFormatToken = 0;
 
   moho::StatItem* sEngineStatShorelineTotalCellsStage1 = nullptr;
@@ -95,7 +86,8 @@ namespace
   };
   static_assert(sizeof(ShorelineMeshRecord) == 0x18, "ShorelineMeshRecord size must be 0x18");
 
-  constexpr std::int32_t kMaxShorelineTriangles = 4094;
+  // Retail 4094. Room for three triangles of the last cell past the cap check stays inside the sheet.
+  constexpr std::int32_t kMaxShorelineTriangles = 65000;
 
   void WriteShorelineMeshRecord(
     ShorelineMeshRecord& dest,
@@ -141,16 +133,6 @@ namespace
     return static_cast<float>(heightField->data[sampleIndex]) * kHeightfieldSampleScale;
   }
 
-  [[nodiscard]] moho::ShoreCellPoint2 InterpolateToWater(
-    const ShoreCorner3& first,
-    const ShoreCorner3& second,
-    const float waterElevation
-  )
-  {
-    const float t = (waterElevation - first.y) / (second.y - first.y);
-    return {first.x + ((second.x - first.x) * t), first.z + ((second.z - first.z) * t)};
-  }
-
   void UpdateShoreCellCentroid(
     moho::ShoreCell& cell,
     const std::int32_t pointCount
@@ -191,363 +173,30 @@ namespace
   }
 
   /**
-   * Address: 0x00811350 (FUN_00811350, shoreline_func_0)
-   *
-   * What it does:
-   * Reserved shoreline mask lane (no cell geometry emitted).
+   * Not in the shipped binary. The cutout of the water pass only needs the polygon to COVER the part of the cell whose
+   * terrain is below the water: the depth test against the terrain does the exact cut. The shipped marching-squares
+   * polygons left the saddle cells (masks 6 and 9) without any polygon and only knew the four corners of a cell two
+   * height samples wide, so a 2x2 patch of coast stayed "land" and the water showed a rectangular hole. This builder
+   * covers the whole cell (plus the point bias) and is used for every cell with both dry and wet samples. It does not
+   * depend on the water level: the cell is the whole block, whatever level (the sea's or a water body's) made it a
+   * shore cell.
    */
-  void BuildShoreCellMask0(
-    moho::ShoreCell&,
+  void BuildShoreCellFullQuad(
+    moho::ShoreCell& cell,
     float,
+    const ShoreCorner3& corner00,
     const ShoreCorner3&,
     const ShoreCorner3&,
-    const ShoreCorner3&,
-    const ShoreCorner3&
-  )
-  {}
-
-  /**
-   * Address: 0x00811360 (FUN_00811360, shoreline_func_1)
-   *
-   * What it does:
-   * Builds one 5-point shoreline polygon for mask type 1.
-   */
-  void BuildShoreCellMask1(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 3;
-    cell.mPoints[0] = {corner01.x, corner01.z + kPointBias};
-    cell.mPoints[1] = InterpolateToWater(corner00, corner01, waterElevation);
-    cell.mPoints[2] = {corner11.x + kPointBias, corner11.z + kPointBias};
-    cell.mPoints[3] = InterpolateToWater(corner00, corner10, waterElevation);
-    cell.mPoints[4] = {corner10.x + kPointBias, corner10.z};
-    UpdateShoreCellCentroid(cell, 5);
-  }
-
-  /**
-   * Address: 0x00811530 (FUN_00811530, shoreline_func_2)
-   *
-   * What it does:
-   * Builds one 5-point shoreline polygon for mask type 2.
-   */
-  void BuildShoreCellMask2(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 3;
-    cell.mPoints[0] = {corner01.x - kPointBias, corner01.z + kPointBias};
-    cell.mPoints[1] = {corner00.x - kPointBias, corner00.z};
-    cell.mPoints[2] = {corner11.x, corner11.z + kPointBias};
-    cell.mPoints[3] = InterpolateToWater(corner00, corner10, waterElevation);
-    cell.mPoints[4] = InterpolateToWater(corner10, corner11, waterElevation);
-    UpdateShoreCellCentroid(cell, 5);
-  }
-
-  /**
-   * Address: 0x00811710 (FUN_00811710, shoreline_func_3)
-   *
-   * What it does:
-   * Builds one 4-point shoreline polygon for mask type 3.
-   */
-  void BuildShoreCellMask3(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
     const ShoreCorner3& corner11
   )
   {
     cell.mType = 2;
-    cell.mPoints[0] = {corner01.x, corner01.z + kPointBias};
-    cell.mPoints[1] = InterpolateToWater(corner00, corner01, waterElevation);
-    cell.mPoints[2] = {corner11.x, corner11.z + kPointBias};
-    cell.mPoints[3] = InterpolateToWater(corner10, corner11, waterElevation);
-    UpdateShoreCellCentroid(cell, 4);
-  }
-
-  /**
-   * Address: 0x008118A0 (FUN_008118A0, shoreline_func_4)
-   *
-   * What it does:
-   * Builds one 5-point shoreline polygon for mask type 4.
-   */
-  void BuildShoreCellMask4(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 3;
-    cell.mPoints[0] = InterpolateToWater(corner00, corner01, waterElevation);
-    cell.mPoints[1] = {corner00.x, corner00.z - kPointBias};
-    cell.mPoints[2] = InterpolateToWater(corner01, corner11, waterElevation);
-    cell.mPoints[3] = {corner10.x + kPointBias, corner10.z - kPointBias};
-    cell.mPoints[4] = {corner11.x + kPointBias, corner11.z};
-    UpdateShoreCellCentroid(cell, 5);
-  }
-
-  /**
-   * Address: 0x00811A80 (FUN_00811A80, shoreline_func_5)
-   *
-   * What it does:
-   * Builds one 4-point shoreline polygon for mask type 5.
-   */
-  void BuildShoreCellMask5(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 2;
-    cell.mPoints[0] = InterpolateToWater(corner01, corner11, waterElevation);
-    cell.mPoints[1] = InterpolateToWater(corner00, corner10, waterElevation);
-    cell.mPoints[2] = {corner11.x + kPointBias, corner11.z};
-    cell.mPoints[3] = {corner10.x + kPointBias, corner10.z};
-    UpdateShoreCellCentroid(cell, 4);
-  }
-
-  /**
-   * Address: 0x00811C20 (FUN_00811C20, shoreline_func_6)
-   *
-   * What it does:
-   * Reserved shoreline mask lane (no cell geometry emitted).
-   */
-  void BuildShoreCellMask6(
-    moho::ShoreCell&,
-    float,
-    const ShoreCorner3&,
-    const ShoreCorner3&,
-    const ShoreCorner3&,
-    const ShoreCorner3&
-  )
-  {}
-
-  /**
-   * Address: 0x00811C30 (FUN_00811C30, shoreline_func_7)
-   *
-   * What it does:
-   * Builds one 3-point shoreline polygon for mask type 7.
-   */
-  void BuildShoreCellMask7(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3&,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 1;
-    cell.mPoints[0] = InterpolateToWater(corner01, corner11, waterElevation);
-    cell.mPoints[1] = InterpolateToWater(corner10, corner11, waterElevation);
-    cell.mPoints[2] = {corner11.x + kPointBias, corner11.z + kPointBias};
-    UpdateShoreCellCentroid(cell, 3);
-  }
-
-  /**
-   * Address: 0x00811D90 (FUN_00811D90, shoreline_func_8)
-   *
-   * What it does:
-   * Builds one 5-point shoreline polygon for mask type 8.
-   */
-  void BuildShoreCellMask8(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 3;
-    cell.mPoints[0] = {corner01.x - kPointBias, corner01.z};
+    cell.mPoints[0] = {corner00.x - kPointBias, corner11.z + kPointBias};
     cell.mPoints[1] = {corner00.x - kPointBias, corner00.z - kPointBias};
-    cell.mPoints[2] = InterpolateToWater(corner01, corner11, waterElevation);
-    cell.mPoints[3] = {corner10.x, corner10.z - kPointBias};
-    cell.mPoints[4] = InterpolateToWater(corner10, corner11, waterElevation);
-    UpdateShoreCellCentroid(cell, 5);
-  }
-
-  /**
-   * Address: 0x00811F70 (FUN_00811F70, shoreline_func_9)
-   *
-   * What it does:
-   * Reserved shoreline mask lane (no cell geometry emitted).
-   */
-  void BuildShoreCellMask9(
-    moho::ShoreCell&,
-    float,
-    const ShoreCorner3&,
-    const ShoreCorner3&,
-    const ShoreCorner3&,
-    const ShoreCorner3&
-  )
-  {}
-
-  /**
-   * Address: 0x00811F80 (FUN_00811F80, shoreline_func_10)
-   *
-   * What it does:
-   * Builds one 4-point shoreline polygon for mask type 10.
-   */
-  void BuildShoreCellMask10(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 2;
-    cell.mPoints[0] = {corner01.x - kPointBias, corner01.z};
-    cell.mPoints[1] = {corner00.x - kPointBias, corner00.z};
-    cell.mPoints[2] = InterpolateToWater(corner01, corner11, waterElevation);
-    cell.mPoints[3] = InterpolateToWater(corner00, corner10, waterElevation);
+    cell.mPoints[2] = {corner11.x + kPointBias, corner11.z + kPointBias};
+    cell.mPoints[3] = {corner11.x + kPointBias, corner00.z - kPointBias};
     UpdateShoreCellCentroid(cell, 4);
   }
-
-  /**
-   * Address: 0x00812120 (FUN_00812120, shoreline_func_11)
-   *
-   * What it does:
-   * Builds one 3-point shoreline polygon for mask type 11.
-   */
-  void BuildShoreCellMask11(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3&,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 1;
-    cell.mPoints[0] = {corner01.x - kPointBias, corner01.z + kPointBias};
-    cell.mPoints[1] = InterpolateToWater(corner00, corner01, waterElevation);
-    cell.mPoints[2] = InterpolateToWater(corner01, corner11, waterElevation);
-    UpdateShoreCellCentroid(cell, 3);
-  }
-
-  /**
-   * Address: 0x00812280 (FUN_00812280, shoreline_func_12)
-   *
-   * What it does:
-   * Builds one 4-point shoreline polygon for mask type 12.
-   */
-  void BuildShoreCellMask12(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 2;
-    cell.mPoints[0] = InterpolateToWater(corner00, corner01, waterElevation);
-    cell.mPoints[1] = {corner00.x, corner00.z - kPointBias};
-    cell.mPoints[2] = InterpolateToWater(corner10, corner11, waterElevation);
-    cell.mPoints[3] = {corner10.x, corner10.z - kPointBias};
-    UpdateShoreCellCentroid(cell, 4);
-  }
-
-  /**
-   * Address: 0x00812410 (FUN_00812410, shoreline_func_13)
-   *
-   * What it does:
-   * Builds one 3-point shoreline polygon for mask type 13.
-   */
-  void BuildShoreCellMask13(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3&,
-    const ShoreCorner3& corner11
-  )
-  {
-    cell.mType = 1;
-    cell.mPoints[0] = InterpolateToWater(corner00, corner10, waterElevation);
-    cell.mPoints[1] = {corner10.x + kPointBias, corner10.z - kPointBias};
-    cell.mPoints[2] = InterpolateToWater(corner10, corner11, waterElevation);
-    UpdateShoreCellCentroid(cell, 3);
-  }
-
-  /**
-   * Address: 0x00812570 (FUN_00812570, shoreline_func_14)
-   *
-   * What it does:
-   * Builds one 3-point shoreline polygon for mask type 14.
-   */
-  void BuildShoreCellMask14(
-    moho::ShoreCell& cell,
-    const float waterElevation,
-    const ShoreCorner3& corner00,
-    const ShoreCorner3& corner10,
-    const ShoreCorner3& corner01,
-    const ShoreCorner3&
-  )
-  {
-    cell.mType = 1;
-    cell.mPoints[0] = InterpolateToWater(corner00, corner01, waterElevation);
-    cell.mPoints[1] = {corner00.x - kPointBias, corner00.z - kPointBias};
-    cell.mPoints[2] = InterpolateToWater(corner00, corner10, waterElevation);
-    UpdateShoreCellCentroid(cell, 3);
-  }
-
-  /**
-   * Address: 0x008126D0 (FUN_008126D0, shoreline_func_15)
-   *
-   * What it does:
-   * Reserved shoreline mask lane (no cell geometry emitted).
-   */
-  void BuildShoreCellMask15(
-    moho::ShoreCell&,
-    float,
-    const ShoreCorner3&,
-    const ShoreCorner3&,
-    const ShoreCorner3&,
-    const ShoreCorner3&
-  )
-  {}
-
-  constexpr std::array<ShoreCellMaskBuilder, 16> kShoreCellMaskBuilders = {
-    &BuildShoreCellMask0,
-    &BuildShoreCellMask1,
-    &BuildShoreCellMask2,
-    &BuildShoreCellMask3,
-    &BuildShoreCellMask4,
-    &BuildShoreCellMask5,
-    &BuildShoreCellMask6,
-    &BuildShoreCellMask7,
-    &BuildShoreCellMask8,
-    &BuildShoreCellMask9,
-    &BuildShoreCellMask10,
-    &BuildShoreCellMask11,
-    &BuildShoreCellMask12,
-    &BuildShoreCellMask13,
-    &BuildShoreCellMask14,
-    &BuildShoreCellMask15,
-  };
 
   /**
    * Address: 0x00812790 (FUN_00812790, sub_812790)
@@ -622,10 +271,9 @@ namespace
     }
 
     ResetShoreCell(*cell);
-    if (maskType >= 0 && maskType < static_cast<std::int32_t>(kShoreCellMaskBuilders.size())) {
-      kShoreCellMaskBuilders[static_cast<std::size_t>(maskType)](
-        *cell, waterElevation, corner00, corner10, corner01, corner11
-      );
+    if (maskType >= 0) {
+      // The retail per-mask polygons (0x00811350 and 15 more) stay in the exe; see BuildShoreCellFullQuad.
+      BuildShoreCellFullQuad(*cell, waterElevation, corner00, corner10, corner01, corner11);
     }
 
     (void)terrainResource;
@@ -638,7 +286,9 @@ namespace
 namespace moho
 {
   bool ren_Shoreline = false;
-  float ren_ShorelineCutoff = 1000.0f; // 0x00F57D64 (shipped .data)
+  // Retail 1000: shoreline cells further than 1000 units (view depth) were skipped, so the land cutout of the water
+  // pass vanished in blocks along far coasts. 0 = never fade (SpatialEntryLess: mFadeOut <= 0 entries do not fade).
+  float ren_ShorelineCutoff = 0.0f; // 0x00F57D64 (shipped .data: 1000)
 
   bool ren_ShorelineMemo = true;
   namespace
@@ -806,6 +456,19 @@ namespace moho
           const float height01 = ReadHeightSampleMeters(heightField, x, z + 2);
           const float height11 = ReadHeightSampleMeters(heightField, x + 2, z + 2);
 
+          // Nine samples of the cell, not just the corners: a ridge or pool between the corners makes the cell a shore
+          // cell too. (A dry body's block has been skipped above: it has no level to cut at.)
+          float lowest = height00;
+          float highest = height00;
+          for (std::int32_t sz = 0; sz <= 2; ++sz) {
+            for (std::int32_t sx = 0; sx <= 2; ++sx) {
+              const float sample = ReadHeightSampleMeters(heightField, x + sx, z + sz);
+              lowest = std::min(lowest, sample);
+              highest = std::max(highest, sample);
+            }
+          }
+          const bool mixedCell = highest >= waterElevation && lowest < waterElevation;
+
           std::int32_t maskType = 0;
           if (height00 >= waterElevation) {
             maskType |= 1;
@@ -820,7 +483,7 @@ namespace moho
             maskType |= 8;
           }
 
-          if (maskType != 0 && maskType != 6 && maskType != 9 && maskType != 15) {
+          if (mixedCell) {
             CreateShoreCellFromMask(
               *this,
               terrainResource,
