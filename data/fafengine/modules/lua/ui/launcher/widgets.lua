@@ -53,6 +53,7 @@ function MapPicture(frame)
     local placeholder = Theme.Icon(frame, 'maps', 28, C.subtle, 1.5)
     LayoutHelpers.AtCenterIn(placeholder, frame)
     placeholder.Depth:Set(function() return frame.Depth() + 1 end)
+    local bar -- the loading bar (below)
     -- The texture loads when the map changes; which of the two shows is set every time, as a Show on an ancestor
     -- shows both.
     frame.SetMap = function(self, map)
@@ -70,6 +71,41 @@ function MapPicture(frame)
         end
         Theme.SetVisible(picture, self.shown)
         Theme.SetVisible(placeholder, not self.shown)
+        Theme.SetVisible(bar, self.loading and not self.shown and true or false)
+    end
+    -- While a picture is on its way (SetLoading(true), set with every paint like SetMap): a short bar runs along the
+    -- frame's bottom edge and the map icon breathes; with Reduce motion only the icon dims.
+    local Anim = import('/fafengine/modules/lua/ui/launcher/anim.lua')
+    bar = Theme.Rect(frame, C.accent)
+    bar.Bottom:Set(function() return frame.Bottom() - Scale(1) end)
+    bar.Height:Set(Scale(2))
+    bar.Left:Set(frame.Left)
+    bar.Right:Set(frame.Left)
+    bar.Width:Set(function() return bar.Right() - bar.Left() end)
+    bar.Depth:Set(function() return frame.Depth() + 6 end)
+    bar:DisableHitTest()
+    bar.phase = 0
+    bar.OnFrame = function(self, delta)
+        self.phase = math.mod(self.phase + delta / 1.2, 1)
+        local width = frame.Width()
+        local span = math.floor(width * 0.4)
+        local x = -span + (width + span) * Anim.Ease.inOut(self.phase)
+        local left = frame.Left() + math.max(1, math.floor(x))
+        local right = frame.Left() + math.min(width - 1, math.floor(x + span))
+        self.Left:Set(left)
+        self.Right:Set(math.max(left, right))
+        placeholder:SetAlpha(0.45 + 0.35 * math.sin(self.phase * 6.2832), false)
+    end
+    frame.SetLoading = function(self, loading)
+        loading = loading and not self.shown and true or false
+        local moving = loading and not Anim.ReduceMotion()
+        if self.loading ~= loading or self.barMoving ~= moving then
+            self.loading = loading
+            self.barMoving = moving
+            bar:SetNeedsFrameUpdate(moving)
+            placeholder:SetAlpha(loading and 0.5 or 1, false)
+        end
+        Theme.SetVisible(bar, moving)
     end
     return picture
 end
@@ -661,9 +697,26 @@ function PlayerTag(parent, size, onClick)
     return tag
 end
 
+-- The dialogs open now (weak: a destroyed one goes by itself), for "is the player busy in a dialog".
+local openModals = setmetatable({}, { __mode = 'k' })
+
+--- How many Modal dialogs are open.
+function OpenModals()
+    local count = 0
+    for cover in openModals do
+        if IsDestroyed(cover) then
+            openModals[cover] = nil
+        else
+            count = count + 1
+        end
+    end
+    return count
+end
+
 --- A dimmed cover over the whole screen that takes every click, with a bracketed panel in its middle.
 function Modal(root, width, height)
     local cover = Theme.Rect(root, 'e0020508')
+    openModals[cover] = true
     LayoutHelpers.FillParent(cover, root)
     Theme.SizeFromEdges(cover)
     cover.Depth:Set(function() return root.Depth() + 500 end)
@@ -701,13 +754,16 @@ function FrameUnits()
     return LayoutHelpers.InvScaleNumber(frame.Width()), LayoutHelpers.InvScaleNumber(frame.Height())
 end
 
---- A thin scrollbar along `area`'s right edge for a list with `Scrolled()` -> first, shown, total.
+--- A thin scrollbar along `area`'s right edge for a list with `Scrolled()` -> first, shown, total, a `top` (its first
+--- row) and `Paint()`. The thumb can be dragged, a click on the track moves the thumb's middle there, and the bar
+--- widens under the mouse; a list may give `ScrollTo(first)` for anything more than `top` and `Paint`.
 function ScrollMark(area, list)
     local track = Theme.Rect(area, C.line)
     track.Right:Set(area.Right)
     track.Top:Set(area.Top)
     track.Bottom:Set(area.Bottom)
     track.Width:Set(Scale(3))
+    track.Height:Set(function() return track.Bottom() - track.Top() end)
     track:DisableHitTest()
     local thumb = Theme.Rect(area, C.accent)
     thumb.Right:Set(area.Right)
@@ -718,16 +774,107 @@ function ScrollMark(area, list)
     thumb.Height:Set(Scale(16))
     thumb:DisableHitTest()
     thumb.Depth:Set(function() return track.Depth() + 1 end)
-    local mark = {}
+    local mark = { track = track, thumb = thumb, size = Scale(16), offset = 0 }
+    local over, dragging = false, false
+
+    local function Range()
+        local first, shown, total = list:Scrolled()
+        return first, math.max(1, total - shown + 1), total > shown
+    end
+    -- The first row for the thumb's top at `y` (screen pixels).
+    local function FirstAt(y)
+        local _, last = Range()
+        local room = math.max(1, track.Height() - mark.size)
+        local share = math.max(0, math.min(1, (y - track.Top()) / room))
+        return math.max(1, math.min(last, math.floor(share * (last - 1) + 1.5)))
+    end
+    local function ScrollTo(first)
+        if list.ScrollTo then
+            list:ScrollTo(first)
+        elseif first ~= list.top then
+            list.top = first
+            list:Paint()
+        end
+    end
+    --- The thumb's grip (where it was taken, mark.offset) at `y`: the list scrolls to match (a drag's every move).
+    function mark:DragTo(y)
+        ScrollTo(FirstAt(y - self.offset))
+    end
+    local function Style()
+        local wide = over or dragging
+        track.Width:Set(Scale(wide and 6 or 3))
+        thumb.Width:Set(Scale(wide and 6 or 3))
+        thumb:SetSolidColor(dragging and C.text or C.accent)
+    end
+
+    -- The mouse's side of the bar: wider than the line so it is easy to hit, over the list's own controls.
+    local hit = Theme.Rect(area, C.clear)
+    hit.Right:Set(area.Right)
+    hit.Top:Set(area.Top)
+    hit.Bottom:Set(area.Bottom)
+    hit.Width:Set(Scale(12))
+    hit.Depth:Set(function() return area.Depth() + 40 end)
+    hit.HandleEvent = function(self, event)
+        local _, _, scrolls = Range()
+        if not scrolls then
+            return false
+        end
+        if event.Type == 'MouseEnter' then
+            over = true
+            Style()
+        elseif event.Type == 'MouseExit' then
+            over = false
+            Style()
+        elseif event.Type == 'ButtonPress' and event.Modifiers.Left then
+            local y = event.MouseY
+            if y >= thumb.Top() and y <= thumb.Bottom() then
+                mark.offset = y - thumb.Top()
+            else
+                -- A click beside the thumb puts its middle there, and the drag goes on from it.
+                mark.offset = math.floor(mark.size / 2)
+                ScrollTo(FirstAt(y - mark.offset))
+            end
+            if event.NoDrag then
+                return true -- a test's press: the jump only (a drag follows the real pointer at once)
+            end
+            dragging = true
+            Style()
+            local Dragger = import('/lua/maui/dragger.lua').Dragger
+            local drag = Dragger()
+            drag.OnMove = function(dragSelf, x, moveY)
+                mark:DragTo(moveY)
+            end
+            drag.OnRelease = function(dragSelf, x, upY)
+                dragging = false
+                mark.drag = nil
+                Style()
+                dragSelf:Destroy()
+            end
+            drag.OnCancel = function(dragSelf)
+                dragging = false
+                mark.drag = nil
+                Style()
+                dragSelf:Destroy()
+            end
+            mark.drag = drag
+            import('/lua/maui/dragger.lua').PostDragger(self:GetRootFrame(), event.KeyCode, drag)
+            return true
+        end
+        return false
+    end
+    mark.hit = hit
+
     mark.Update = function(self)
         local first, shown, total = list:Scrolled()
         local visible = total > shown
         Theme.SetVisible(track, visible)
         Theme.SetVisible(thumb, visible)
+        Theme.SetVisible(hit, visible)
         if visible then
             local height = track.Height()
             local size = math.max(Scale(16), math.floor(height * shown / total))
             local top = math.floor((height - size) * (first - 1) / math.max(1, total - shown))
+            self.size = size
             thumb.Top:Set(function() return track.Top() + top end)
             thumb.Height:Set(size)
         end

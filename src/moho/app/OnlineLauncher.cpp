@@ -3379,9 +3379,9 @@ void moho::ONLINE_Frame()
   }
   PollServerGame(s);
   if (s.match == MatchState::Preparing && !s.serverGame && s.iceReady.load()) {
-    if (moho::WLD_GetActiveSession() != nullptr) {
-      // The launcher's background battle (a sandbox game behind it, battle.lua) ends first; FAF's lobby takes the UI
-      // once no game runs. Asked once; the next polls wait for the session to go.
+    if (moho::WLD_GetActiveSession() != nullptr || moho::WLD_GetFrameAction() != moho::EWldFrameAction::Inactive) {
+      // The launcher's background battle (a sandbox game behind it, battle.lua) ends first, also while it is still
+      // loading; FAF's lobby takes the UI once no game runs or loads. Asked once; the next polls wait for it to go.
       if (!s.battleEnding) {
         s.battleEnding = true;
         LogLine("a match is ready while the launcher's battle runs; ending the battle first");

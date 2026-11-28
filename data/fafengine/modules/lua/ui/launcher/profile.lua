@@ -1184,6 +1184,9 @@ function Profile:PaintMaps(page)
                 end
             end
             Theme.SetVisible(row.thumb, thumb and true or false)
+            -- On its way: asked for, not failed (a map FAF has no thumbnail for keeps the plain icon).
+            row.frame:SetLoading(not installed and not thumb and map.thumbnail ~= nil and map.thumbnail ~= '' and
+                not (self.thumbFailed and self.thumbFailed[map.thumbnail]) and rawget(_G, 'FafLibrary_Thumbnail') ~= nil)
             Theme.SetText(row.name, map.name)
             Theme.SetText(row.size, map.size)
             Theme.SetText(row.cells[2], tostring(map.games))

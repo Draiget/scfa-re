@@ -177,6 +177,37 @@ function OnFirstUpdate()
         LOG('MENU BATTLE: the HUD is hidden')
     end
 end
+-- No loading screen for the battle: while it loads (the user Lua state, which started it) the provider builds the
+-- launcher where FAF plays its loading movie; when the game's UI comes (the session's state) it skips FAF's "IN
+-- TRANSIT" picture and the HUD's opening animations, which would show the HUD again.
+local battleCreateWldUIProvider = CreateWldUIProvider
+function CreateWldUIProvider()
+    battleCreateWldUIProvider()
+    local made = provider
+    if not made then
+        return
+    end
+    local Battle = import('/fafengine/modules/lua/ui/launcher/battle.lua')
+    if Battle.Loading() then
+        local fafStart = made.StartLoadingDialog
+        made.StartLoadingDialog = function(self)
+            supressExitDialog = true
+            if not Battle.OnLoadingDialog() then
+                fafStart(self) -- the launcher failed: FAF's loading screen after all
+            end
+        end
+        made.UpdateLoadingDialog = function(self, elapsedTime)
+        end
+        return
+    end
+    local ok, battle = pcall(MenuBattle)
+    if ok and battle then
+        made.StopLoadingDialog = function(self)
+            GetCursor():Show()
+        end
+    end
+end
+
 local battleCreateUI = CreateUI
 function CreateUI(isReplay)
     battleCreateUI(isReplay)

@@ -42,7 +42,9 @@ function ReduceMotion()
 end
 
 local function Step(delta)
-    local running = false
+    -- The finished ones' done() run after the walk: a done() may start the next tween (a fade out after a fade in),
+    -- and a table must not get new keys while it is walked.
+    local finished = {}
     for key, tween in tweens do
         tween.elapsed = tween.elapsed + delta
         local progress = math.min(1, tween.elapsed / tween.duration)
@@ -53,16 +55,22 @@ local function Step(delta)
             end
         end
         if progress >= 1 then
-            tweens[key] = nil
-            count = count - 1
-            if tween.done then
-                pcall(tween.done)
-            end
-        else
-            running = true
+            table.insert(finished, { key = key, tween = tween })
         end
     end
-    if not running and driver then
+    for _, entry in finished do
+        if tweens[entry.key] == entry.tween then
+            tweens[entry.key] = nil
+            count = count - 1
+        end
+    end
+    for _, entry in finished do
+        if entry.tween.done then
+            pcall(entry.tween.done)
+        end
+    end
+    if count <= 0 and driver then
+        count = 0
         driver:SetNeedsFrameUpdate(false)
     end
 end
@@ -89,8 +97,18 @@ function Attach(root)
     end
 end
 
+-- Until this time (GetSystemTimeSeconds) tweens land at once unless opts.always: a launcher built again for the
+-- battle's load shows what was already on screen, so its pages and rows must not come in a second time.
+local quietUntil = 0
+
+--- Tweens land at once for the next `seconds` (Run's opts.always still move).
+function Quiet(seconds)
+    quietUntil = GetSystemTimeSeconds() + (seconds or 0.5)
+end
+
 --- Runs apply(eased progress 0..1) over `seconds` (after `delay`), then done(); a later tween with the same key
---- takes this one's place. With motion off, or no driver, apply(1) and done() run at once.
+--- takes this one's place. With motion off, or no driver, apply(1) and done() run at once; so they do in a Quiet
+--- time unless opts.always.
 function Run(key, seconds, apply, done, opts)
     opts = opts or {}
     if tweens[key] then
@@ -101,7 +119,7 @@ function Run(key, seconds, apply, done, opts)
             pcall(old.done)
         end
     end
-    if ReduceMotion() or not driver or seconds <= 0 then
+    if ReduceMotion() or not driver or seconds <= 0 or (not opts.always and GetSystemTimeSeconds() < quietUntil) then
         pcall(apply, 1)
         if done then
             pcall(done)

@@ -1,8 +1,9 @@
--- The launcher's background battle, in the sim (game option FafreMenuBattle): AI armies fight on a small map behind
--- the launcher. The player's own army has nothing (they watch: the focus goes to no army, the map has no fog), every
--- few seconds the busiest place (where units of two armies meet) goes to the UI's camera (Sync.FafreBattleFocus), and
--- an army that has lost everything gets its commander back at its start, so the fight goes on for as long as the
--- launcher shows.
+-- The launcher's background battle, in the sim (game option FafreMenuBattle): AI armies fight behind the launcher.
+-- The player has no army (they watch: the focus goes to no army, the map has no fog). The armies' start positions go
+-- to the UI's camera once (Sync.FafreBattleSpawns, for its opening shot), every few seconds the busiest place (where
+-- units of two armies meet) goes after them (Sync.FafreBattleFocus), and an army that has lost everything gets its
+-- commander back at its start, so the fight goes on for as long as the launcher shows. A human army, if a launch
+-- gives one, is emptied once its commander has warped in.
 
 local ScenarioUtils = import('/lua/sim/scenarioutilities.lua')
 
@@ -26,10 +27,11 @@ local function Busiest(size)
             local key = math.floor(position[1] / kCell) .. ':' .. math.floor(position[3] / kCell)
             local cell = cells[key]
             if not cell then
-                cell = { x = 0, z = 0, n = 0, count = 0, armies = {}, armyCount = 0 }
+                cell = { x = 0, y = 0, z = 0, n = 0, count = 0, armies = {}, armyCount = 0 }
                 cells[key] = cell
             end
             cell.x = cell.x + position[1]
+            cell.y = cell.y + position[2]
             cell.z = cell.z + position[3]
             cell.n = cell.n + 1 -- the units the place's middle is the average of
             cell.count = cell.count + 1
@@ -53,7 +55,8 @@ local function Busiest(size)
     if not best then
         return nil
     end
-    return { x = best.x / best.n, z = best.z / best.n, fight = best.armyCount >= 2, units = best.n }
+    return { x = best.x / best.n, y = best.y / best.n, z = best.z / best.n, fight = best.armyCount >= 2,
+        units = best.n }
 end
 
 local function Respawn(brain, index)
@@ -71,10 +74,25 @@ local function Respawn(brain, index)
     end
 end
 
+local function Spawns()
+    local list = {}
+    for index, brain in ArmyBrains do
+        if not Watcher(brain) and not ArmyIsCivilian(index) then
+            local marker = ScenarioUtils.GetMarker(brain.Name)
+            if marker and marker.position then
+                table.insert(list, { x = marker.position[1], y = marker.position[2], z = marker.position[3],
+                    army = brain.Name })
+            end
+        end
+    end
+    return list
+end
+
 function Run(options)
-    WaitTicks(2)
     local size = ScenarioInfo.size or { 512, 512 }
     SetFocusArmy(-1)
+    Sync.FafreBattleSpawns = Spawns()
+    WaitTicks(2)
     -- The watcher's commander goes once its warp-in is over (the commander's own script runs on it until then).
     ForkThread(function()
         WaitSeconds(7)

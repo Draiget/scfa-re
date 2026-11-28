@@ -18,14 +18,21 @@ do
     end
 end
 
--- The launcher's background battle: where the fight is (Sync.FafreBattleFocus) for the launcher's camera.
+-- The launcher's background battle: the armies' start positions (Sync.FafreBattleSpawns) and where the fight is
+-- (Sync.FafreBattleFocus) for the launcher's camera.
 do
     local battleOnSync = OnSync
     function OnSync()
         battleOnSync()
-        if Sync.FafreBattleFocus then
+        if Sync.FafreBattleFocus or Sync.FafreBattleSpawns then
             local ok, why = pcall(function()
-                import('/fafengine/modules/lua/ui/launcher/battle.lua').OnFocus(Sync.FafreBattleFocus)
+                local Battle = import('/fafengine/modules/lua/ui/launcher/battle.lua')
+                if Sync.FafreBattleSpawns then
+                    Battle.OnSpawns(Sync.FafreBattleSpawns)
+                end
+                if Sync.FafreBattleFocus then
+                    Battle.OnFocus(Sync.FafreBattleFocus)
+                end
             end)
             if not ok then
                 WARN('MENU BATTLE: ' .. tostring(why))

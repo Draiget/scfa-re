@@ -452,6 +452,11 @@ function Build(launcher, page)
         return path
     end
 
+    --- Whether thumbnails are still downloading or waiting to be mounted (their frames show a loading bar).
+    function view:ThumbsBusy()
+        return next(self.thumbJobs) ~= nil or self.mountWanted == true
+    end
+
     function view:Items()
         if self.tab == 'local' then
             self.localMaps = self.localMaps or LocalMaps()
@@ -494,6 +499,7 @@ function Build(launcher, page)
                     card.thumb:SetTexture(thumb)
                 end
                 Theme.SetVisible(card.thumb, thumb ~= nil)
+                card.frame:SetLoading(not installed and thumb == nil and map.thumbnail ~= nil and self:ThumbsBusy())
                 Theme.SetText(card.name, map.name)
                 Theme.SetText(card.facts, (map.size ~= '' and (map.size .. '  -  ') or '') .. map.players .. ' players')
                 Theme.SetVisible(card.badge, (not map.isLocal) and installed)
@@ -558,6 +564,8 @@ function Build(launcher, page)
             self.bigThumb:SetTexture(thumb)
         end
         Theme.SetVisible(self.bigThumb, thumb ~= nil)
+        self.bigFrame:SetLoading(map ~= nil and not installed and thumb == nil and map.thumbnail ~= nil and
+            self:ThumbsBusy())
         self.action:SetLabel(installed and 'Remove' or 'Download')
         self.action:SetEnabled(map ~= nil and (installed or map.url ~= nil) and not self.jobs.install)
         Theme.SetVisible(self.action, map ~= nil and not (map.isLocal and not self:FromVault(map)))

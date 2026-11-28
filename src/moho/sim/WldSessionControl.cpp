@@ -815,6 +815,43 @@ namespace moho
      * session info, runs the loader's teardown callbacks, and finally tells the
      * client manager that this client has finished loading.
      */
+    /**
+     * Engine addition (the launcher's background battle): whether the user interface asks the load to wait before it
+     * switches to the game's interface. The launcher is built over a loading battle in the user Lua state, and the
+     * switch rebuilds the whole UI in the session's state, so while the player has a dialog open or is typing there
+     * the launcher's `FafreHoldLoadEnd()` answers true and the session waits (the sim not started), for at most
+     * `kMaxHoldSeconds` per session. No such global, or a script error, holds nothing.
+     */
+    [[nodiscard]] bool UiHoldsLoadEnd()
+    {
+      constexpr double kMaxHoldSeconds = 90.0;
+      static const CWldSession* sHeldFor = nullptr;
+      static std::chrono::steady_clock::time_point sHeldSince{};
+      const auto now = std::chrono::steady_clock::now();
+      if (sHeldFor != gActiveWldSession) {
+        sHeldFor = gActiveWldSession;
+        sHeldSince = now;
+      }
+      if (std::chrono::duration<double>(now - sHeldSince).count() > kMaxHoldSeconds) {
+        return false;
+      }
+      LuaPlus::LuaState* const state = USER_GetLuaState();
+      if (state == nullptr) {
+        return false;
+      }
+      try {
+        const LuaPlus::LuaObject hold = state->GetGlobal("FafreHoldLoadEnd"); // a raw read: no strict-globals error
+        if (!hold.IsFunction()) {
+          return false;
+        }
+        LuaPlus::LuaFunction<bool> holdFn(hold);
+        return holdFn();
+      } catch (const std::exception& error) {
+        gpg::Warnf("FafreHoldLoadEnd: %s", error.what());
+      } catch (...) {}
+      return false;
+    }
+
     void WLD_DoInitializing(
       bool* const outContinue
     )
@@ -825,6 +862,9 @@ namespace moho
           *outContinue = false;
         }
         gWldFrameAction = EWldFrameAction::Exit;
+        return;
+      }
+      if (UiHoldsLoadEnd()) {
         return;
       }
 

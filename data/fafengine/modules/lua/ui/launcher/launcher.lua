@@ -2763,6 +2763,13 @@ function Launcher:Options()
     end)
 end
 
+--- Whether the player is in the middle of something a rebuild of the UI would close: a screen (a lobby, Options),
+--- a dialog (a profile, a report) or the exit question. The battle's load waits for it (battle.lua, HoldLoadEnd).
+function Launcher:Busy()
+    return (self.screen and true or false) or self.exitDialog ~= nil and self.exitDialog ~= false or
+        Widgets.OpenModals() > 0
+end
+
 --- Over the battle: the launcher fades to almost nothing so the battle shows; a click anywhere or Esc brings it back.
 function Launcher:WatchBattle(on)
     if on == nil then
@@ -2806,7 +2813,7 @@ function Launcher:WatchBattle(on)
             self.watchLayer = nil
         end
         if self.dim then
-            self.dim:SetSolidColor('80040a10')
+            self.dim:SetSolidColor(kBattleDim)
         end
         local launcher = self
         import('/lua/ui/uimain.lua').SetEscapeHandler(function() launcher:Exit() end)
@@ -2875,6 +2882,7 @@ function Launcher:ShowPage(name)
     local previous = self.page
     self.page = name
     lastShownPage = name
+    Battle.KeepPage(name) -- the launcher built over the battle's load and over the battle opens on it too
     for pageName, page in self.pages do
         Theme.SetVisible(page, pageName == name)
     end
@@ -3507,6 +3515,9 @@ local function BuildStatusBar(launcher, body)
     return status
 end
 
+-- Over the battle: the dark layer between the world and the pages (82 %; the panels' glass adds its own).
+kBattleDim = 'd0040a10'
+
 local function Build(launcher)
     local root = UIUtil.CreateScreenGroup(GetFrame(0), 'Launcher ScreenGroup')
     launcher.root = root
@@ -3517,8 +3528,9 @@ local function Build(launcher)
     launcher.battle = Battle.InBattle()
     Theme.SetGlass(launcher.battle)
     if launcher.battle then
-        -- The battle shows through, darkened enough for the panels to read.
-        launcher.dim = Theme.Fill(root, '80040a10')
+        -- The battle shows through, darkened enough for text set straight on a page (lists, captions, the thin
+        -- lines between rows) to read; Watch the battle clears it.
+        launcher.dim = Theme.Fill(root, kBattleDim)
         -- The world under it takes no mouse: no hover marks, no selection boxes behind the pages.
         launcher.dim:EnableHitTest()
         launcher.dim.HandleEvent = function(self, event)
@@ -3527,7 +3539,10 @@ local function Build(launcher)
     else
         Theme.Fill(root, C.page)
     end
-    if not launcher.battle and Prefs.GetOption('mainmenu_bgmovie') then
+    -- The menu movie when no battle comes: the launcher built while a battle loads looks as the one before it and the
+    -- one over the battle starts from it (an opaque page that fades to the battle, battle.lua).
+    if not launcher.battle and not Battle.BuildingOverLoad() and not Battle.MayStart() and
+        Prefs.GetOption('mainmenu_bgmovie') then
         local movie = Movie(root)
         movie:Set('/movies/main_menu.sfd')
         LayoutHelpers.AtCenterIn(movie, root)
@@ -3857,13 +3872,25 @@ function CreateUI(buildFafMenu)
     Cleanup()
     local launcher = setmetatable({ buildFafMenu = buildFafMenu, page = 'online' }, Launcher)
     current = launcher
+    -- Built again for the battle (over its load, then over the game): what was on screen comes back as it was, with
+    -- no page or rows coming in.
+    local overLoad = Battle.BuildingOverLoad()
+    local rebuilt = overLoad or Battle.InBattle()
+    if rebuilt then
+        Anim.Quiet(0.8)
+    end
     if rawget(_G, 'FafOnline_TakeResume') then
         launcher.resume = FafOnline_TakeResume() or false
         launcher.resumeSince = GetSystemTimeSeconds()
     end
     Build(launcher)
     -- Back on the page shown before the front end was built again (Options after a UI scale change).
-    launcher:ShowPage((lastShownPage and launcher.pages[lastShownPage]) and lastShownPage or 'online')
+    local openOn = (lastShownPage and launcher.pages[lastShownPage]) and lastShownPage or nil
+    if not openOn and rebuilt then
+        local kept = Battle.KeptPage()
+        openOn = (kept and launcher.pages[kept]) and kept or nil
+    end
+    launcher:ShowPage(openOn or 'online')
     -- The preview walk's way back: the launcher is here again; which page it opened on, then the walk ends.
     if Prefs.GetFromCurrentProfile('fafre_preview_test') then
         Prefs.SetToCurrentProfile('fafre_preview_test', nil)
@@ -3875,21 +3902,62 @@ function CreateUI(buildFafMenu)
         end)
     end
     launcher:ShowHome()
-    LOG('LAUNCHER: shown' .. (launcher.battle and ' over the battle' or ''))
+    LOG('LAUNCHER: shown' .. (launcher.battle and ' over the battle' or (overLoad and ' over the loading battle' or '')) ..
+        ', page ' .. tostring(launcher.page))
+    if overLoad then
+        -- Esc while the battle loads: the launcher's Exit, not the game's menu.
+        import('/lua/ui/uimain.lua').SetEscapeHandler(function() launcher:Exit() end)
+        -- /menubattletest: the exit question opens over the load and stays until the load has waited for it 5 s.
+        if GetCommandLineArg('/menubattletest', 0) then
+            ForkThread(function()
+                WaitSeconds(0.5)
+                LOG('BATTLE TEST: over the load, page ' .. tostring(launcher.page) .. ', loading ' ..
+                    tostring(Battle.Loading()) .. ', world loading ' .. tostring(WorldIsLoading()))
+                launcher:Exit()
+                LOG('BATTLE TEST: the exit question is open over the load, busy ' .. tostring(launcher:Busy()))
+                local waited = 0
+                while not Battle.HeldAt() and waited < 90 do
+                    WaitSeconds(0.5)
+                    waited = waited + 0.5
+                end
+                WaitSeconds(5)
+                LOG('BATTLE TEST: closing the exit question, the load waited ' ..
+                    string.format('%.1f s', Battle.HeldAt() and (GetSystemTimeSeconds() - Battle.HeldAt()) or -1))
+                if launcher.exitDialog then
+                    launcher.exitDialog:Destroy()
+                    launcher.exitDialog = false
+                end
+            end)
+        end
+        return
+    end
     if launcher.battle then
         -- Esc over the battle: the launcher's Exit, not the game's menu.
         import('/lua/ui/uimain.lua').SetEscapeHandler(function() launcher:Exit() end)
         -- /menubattletest: the battle runs a while under the launcher, then Skirmish ends it and opens the lobby.
         if GetCommandLineArg('/menubattletest', 0) then
             ForkThread(function()
-                WaitSeconds(25)
+                WaitSeconds(1)
+                LOG('BATTLE TEST: the opening, page ' .. tostring(launcher.page) .. ', game time ' ..
+                    string.format('%.1f', GetGameTimeSeconds()))
+                WaitSeconds(4)
+                LOG('BATTLE TEST: the battle shows, page ' .. tostring(launcher.page) .. ', shots ' .. Battle.Cuts() ..
+                    ', focus army ' .. tostring(GetFocusArmy()) .. ', ' .. Battle.Describe())
+                -- The opening shot full screen, as Watch the battle shows it.
+                launcher:WatchBattle(true)
+                WaitSeconds(1.5)
+                LOG('BATTLE TEST: the opening full screen, ' .. Battle.Describe())
+                WaitSeconds(1.5)
+                launcher:WatchBattle(false)
+                WaitSeconds(17)
                 LOG('BATTLE TEST: over the battle, page ' .. tostring(launcher.page) .. ', in battle ' ..
                     tostring(Battle.InBattle()) .. ', camera cuts ' .. Battle.Cuts())
                 WaitSeconds(tonumber((GetCommandLineArg('/menubattletest', 1) or {})[1]) or 15)
                 LOG('BATTLE TEST: later, camera cuts ' .. Battle.Cuts())
                 launcher:WatchBattle(true)
                 WaitSeconds(2)
-                LOG('BATTLE TEST: watching, launcher alpha ' .. string.format('%.2f', launcher.body:GetAlpha()))
+                LOG('BATTLE TEST: watching, launcher alpha ' .. string.format('%.2f', launcher.body:GetAlpha()) ..
+                    ', ' .. Battle.Describe())
                 WaitSeconds(2)
                 launcher:WatchBattle(false)
                 WaitSeconds(1)
@@ -3900,6 +3968,7 @@ function CreateUI(buildFafMenu)
         end
         return
     end
+    Battle.FrontEnd() -- no battle loads now (one that ended before it showed counts as failed)
     local kept = Battle.TakePending()
     if kept then
         ForkThread(function()
@@ -3917,12 +3986,16 @@ function CreateUI(buildFafMenu)
                 ExitApplication()
             end
         end)
-    elseif Battle.Wanted() then
+    elseif Battle.MayStart() then
         local status = rawget(_G, 'FafOnline_Status') and FafOnline_Status() or {}
         if (status.match or 'idle') == 'idle' and not launcher.resume then
             ForkThread(function()
-                WaitSeconds(0.5)
-                if current == launcher and not launcher.screen and Battle.Wanted() then
+                WaitSeconds(0.2)
+                if GetCommandLineArg('/menubattletest', 0) and current == launcher then
+                    launcher:ShowPage('leaderboards')
+                    LOG('BATTLE TEST: the front end shows leaderboards; the battle starts')
+                end
+                if current == launcher and not launcher.screen and Battle.MayStart() then
                     Battle.Start()
                 end
             end)
@@ -4980,9 +5053,28 @@ function TestWalk()
                     end
                     Wait(1)
                 end
+                -- The map rows whose picture is still on its way (a loading bar) and those showing one.
+                local function MapFrames()
+                    local loading, pictures = 0, 0
+                    for _, row in (profile.pages.maps and profile.pages.maps.rows or {}) do
+                        if not row:IsHidden() then
+                            if row.frame.loading then
+                                loading = loading + 1
+                            end
+                            if row.thumbPath or row.frame.shown then
+                                pictures = pictures + 1
+                            end
+                        end
+                    end
+                    return loading .. ' loading, ' .. pictures .. ' with a picture'
+                end
                 for _, tab in { 'overview', 'history', 'maps', 'stats', 'names', 'clan' } do
                     if profile then
                         profile:ShowTab(tab)
+                        if tab == 'maps' then
+                            Wait(1)
+                            Step('profile maps while the pictures come: ' .. MapFrames())
+                        end
                         for i = 1, 10 do
                             local busy = false
                             for _ in profile.jobs do
@@ -5013,6 +5105,14 @@ function TestWalk()
                                 profile.pages.stats.boxes[1].value:GetText() .. ', factions ' ..
                                 profile.pages.stats.factions[1].value:GetText()) or 'none')) or '') ..
                             (table.getn(errors) > 0 and (', errors ' .. table.concat(errors, '; ')) or ''))
+                        if tab == 'maps' then
+                            for i = 1, 12 do
+                                if not string.find(MapFrames(), '^0 loading') then
+                                    Wait(1)
+                                end
+                            end
+                            Step('profile maps once they came: ' .. MapFrames())
+                        end
                         Wait(2)
                     end
                 end
@@ -5506,6 +5606,32 @@ function TestWalk()
             Step('changelog: ' .. table.getn(changelog.items) .. ' versions, showing ' ..
                 tostring(changelog.shown and changelog.shown.key) .. ', ' .. table.getn(changelog.document.lines) ..
                 ' lines')
+            -- The notes' scrollbar: a press on its track three quarters down moves the text there (the drag that
+            -- follows ends with the button, which is up).
+            local document = changelog.document
+            local mark = document.mark
+            local first, shown, total = document:Scrolled()
+            if mark and mark.hit and total > shown then
+                local track = mark.track
+                local y = track.Top() + math.floor(track.Height() * 0.75)
+                local before, thumbBefore = document.top, mark.thumb.Top()
+                -- The press without the engine's drag (it follows the real pointer at once), then the drag's moves.
+                mark.hit:HandleEvent({ Type = 'ButtonPress', MouseX = track.Left(), MouseY = y,
+                    Modifiers = { Left = true }, KeyCode = 1, NoDrag = true })
+                local after, thumbAfter = document.top, mark.thumb.Top()
+                mark:DragTo(track.Top() + math.floor(track.Height() * 0.25))
+                local dragged = document.top
+                mark:DragTo(track.Bottom() + 100)
+                Step(string.format('changelog scrollbar: a press at 75%% of the track moved the text from line %d to %d ' ..
+                    'of %d (shown %d), the thumb from %d to %d (track %d-%d); dragged to 25%%: line %d, past the end: ' ..
+                    'line %d (track height %d, thumb %d, grip %d)', before, after, total, shown, thumbBefore, thumbAfter,
+                    track.Top(), track.Bottom(), dragged, document.top, track.Height(), mark.size or -1,
+                    mark.offset or -1))
+                document.top = 1
+                document:Paint()
+            else
+                Step('changelog scrollbar: nothing to scroll (' .. total .. ' lines, ' .. shown .. ' shown)')
+            end
             -- The newest version whose notes name units: their icons under the notes.
             for _, item in changelog.items do
                 changelog:Show(item)
