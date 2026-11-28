@@ -2830,7 +2830,8 @@ function Launcher:Exit()
         '<LOC _Yes>', function()
             launcher:StopSounds()
             launcher.root:Destroy()
-            ExitApplication()
+            -- FAF's graceful quit: a game running (the battle behind the launcher) ends first, then the application.
+            import('/lua/ui/dialogs/eschandler.lua').SafeQuit()
         end,
         '<LOC _No>', function() launcher.exitDialog = false end,
         nil, nil, true, { worldCover = true, enterButton = 1, escapeButton = 2 })
@@ -3961,7 +3962,17 @@ function CreateUI(buildFafMenu)
                 WaitSeconds(2)
                 launcher:WatchBattle(false)
                 WaitSeconds(1)
-                WaitSeconds(3)
+                -- Closing the window over the battle: the launcher's exit question, not FAF's quit with Restart Session.
+                import('/lua/ui/dialogs/eschandler.lua').HandleEsc(true)
+                WaitSeconds(1)
+                LOG('BATTLE TEST: closing the window asks the launcher exit question: ' ..
+                    tostring(launcher.exitDialog and true or false))
+                WaitSeconds(1)
+                if launcher.exitDialog then
+                    launcher.exitDialog:Destroy()
+                    launcher.exitDialog = false
+                end
+                WaitSeconds(1)
                 Prefs.SetToCurrentProfile('MenuTutorialPrompt', true) -- FAF's first-time question stays away
                 launcher:Skirmish()
             end)
