@@ -2,6 +2,7 @@
 -- Each scene: snap the camera, run its commands, log "EV: scene <name>", hold. The runner maps the log lines to the frame dumps.
 ForkThread(function()
     WaitSeconds(6)
+    for _, cmd in (rawget(_G, 'EV_START_CMDS') or {}) do ConExecute(cmd) end
     if EV_TICK then
         ReplaySeek(EV_TICK)
         WaitSeconds(2)
@@ -30,6 +31,15 @@ ForkThread(function()
         end
         WaitSeconds(2)
         for _, cmd in (s[5] or {}) do ConExecute(cmd) end
+        -- A paused game draws no new frame when only a setting changed and the camera did not move, so a scene that
+        -- changes settings moves the camera away and back to exactly the same pose: the frame that is dumped is then
+        -- drawn with the new settings, at the same pose as the scene before it.
+        if camera and pos and s[5] and table.getn(s[5]) > 0 then
+            camera:SnapTo({ pos[1] + 80, pos[2], pos[3] }, { s[3][1], s[3][2], 0 }, s[4])
+            WaitSeconds(1)
+            camera:SnapTo(pos, { s[3][1], s[3][2], 0 }, s[4])
+            WaitSeconds(1.5)
+        end
         LOG('EV: scene ' .. i .. ' ' .. s[1])
         WaitSeconds(s[6] or 5)
     end

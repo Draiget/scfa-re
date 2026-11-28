@@ -26,8 +26,12 @@ Windows, PowerShell 7, Python 3 with Pillow. Nothing here is part of the engine.
 | `mkcomp.py`, `evlib.py` | the composites (master, PR defaults, PR switches off, PR features on; full frame and crop) and the share of pixels that differ (any channel by more than 8 of 255) as full frame / crop / full frame after a 25 px blur, against master, against the PR below, against a repeat of the same build; written to `frames/<pr>/` |
 | `noise.ps1`, `on.ps1`, `wd0.ps1` | every PR build once more (the repeat of a build against itself), the features that are Off by default switched on (lights, shadow filter and GTAO, SMAA and render scale), and master and PR 02 with `ren_WaterDetail 0` |
 | `scenes_ts.lua` | the `ren_TerrainShadows` check of PR 07 (its default changed from 0.45 to 0) |
+| `mkcomp2.py`, `wqexport.py` | the composites and shares as `mkcomp.py`, for the second review round: `pools_height` (the height field next to the `pools` frame) and the Water Quality full-size frames and 1:1 crops |
+| `scenes_sr2.lua`, `scenes_levels2.lua`, `scenes_play3.lua` | the sea scenes with the Water Quality scenes before the switches-off scenes, the `levels` scenes (run with `/con sim_FixWaterBodies=1`: without it the map is one big sea), and a whole replay played at speed 30 with `ren_WaterSimLog` on (`EV_START_CMDS`) |
 | `cost.ps1`, `cost_report.py` | 75 s of the running replay with the profile on, defaults and switches off; medians and 95th percentiles of the profile windows |
 
 The pause lands on the first frame after the seek finishes (game second 900.8 for tick 9000), so two builds are compared at the same
 sim state; the water still moves while the game is paused (it runs on wall clock time), which is why two runs of the same build differ on water (more so with the water simulation, which keeps its own state):
 the report carries the repeat of the same build and the land crop as the noise floor, and water is judged by the images.
+
+A paused game draws no new frame when only a console setting changed and the camera did not move, so `ev_camera.lua` moves the camera away and back to the same pose after every scene that runs console commands; without that the frame that is dumped is a stale copy of the scene before. The `ren_*` settings of a run go into the scenes; the command line (`/con`) is used for the sim fixes (`sim_FixWaterBodies=1`).

@@ -64,14 +64,14 @@ def comp(pr, group, api, scene, crop):
 
 PREV = {'pr02': 'master_a', 'pr03': 'pr02', 'pr04': 'pr03', 'pr05': 'pr04', 'pr06': 'pr05', 'pr07': 'pr06', 'pr08': 'pr07', 'pr09': 'pr08'}
 PLAN = {
-    'pr02': {'sr': ['ships', 'coast_far', 'coast_near'], 'astro': ['nowater_wide', 'nowater_mid'], 'levels': ['overview', 'mid']},
-    'pr03': {'sr': ['ships', 'coast_near'], 'astro': ['nowater_wide', 'nowater_mid'], 'levels': ['overview']},
+    'pr02': {'sr': ['ships', 'coast_far', 'coast_near'], 'astro': ['nowater_wide', 'nowater_mid'], 'levels': ['overview', 'mid', 'pools']},
+    'pr03': {'sr': ['ships', 'coast_near'], 'astro': ['nowater_wide', 'nowater_mid'], 'levels': ['overview', 'pools']},
     'pr04': {'sr': ['ships', 'coast_near'], 'astro': ['nowater_wide', 'nowater_mid']},
     'pr05': {'sr': ['ships', 'coast_near'], 'astro': ['nowater_wide', 'nowater_mid']},
     'pr06': {'sr': ['ships', 'coast_near'], 'astro': ['nowater_wide', 'nowater_mid']},
-    'pr07': {'sr': ['ships', 'coast_far', 'coast_near'], 'levels': ['overview', 'mid']},
+    'pr07': {'sr': ['ships', 'coast_far', 'coast_near'], 'levels': ['overview', 'mid', 'pools', 'pools_height']},
     'pr08': {'rivers': ['overview', 'mid']},
-    'pr09': {'rivers': ['overview', 'mid'], 'levels': ['overview']},
+    'pr09': {'rivers': ['overview', 'mid'], 'levels': ['overview', 'pools', 'pools_height']},
 }
 CROP = {'ships': (520, 80, 1000, 350)}
 if __name__ == '__main__':
